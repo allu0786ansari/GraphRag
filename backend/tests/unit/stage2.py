@@ -720,13 +720,15 @@ class TestCriterionResult:
 class TestClaimMetrics:
 
     def test_valid_claim_metrics(self):
-        from app.models import ClaimMetrics, EvalExtractedClaim
-        claim = EvalExtractedClaim(
+        from app.models import ClaimMetrics, ExtractedClaim
+
+        claim = ExtractedClaim(
             claim_id="q001_graphrag_claim_000",
             text="OpenAI was founded in 2015.",
             source_system="graphrag",
             question_id=0,
         )
+
         metrics = ClaimMetrics(
             question_id=0,
             question="What are the main themes?",
@@ -736,6 +738,7 @@ class TestClaimMetrics:
             unique_claim_count=1,
             cluster_count_threshold_07=1,
         )
+
         assert metrics.unique_claim_count == 1
         assert metrics.cluster_count_threshold_05 is None  # not set
 
