@@ -96,3 +96,8 @@ __all__ = [
     "EvalExtractedClaim", "ClaimMetrics", "ClaimComparisonResult",
     "ClaimEvalResponse", "UserPersona",
 ]
+
+import sys
+from . import evaluation_models
+
+sys.modules[__name__ + ".evaluation"] = evaluation_models
