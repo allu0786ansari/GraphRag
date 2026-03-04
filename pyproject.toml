@@ -10,7 +10,8 @@ requires-python = ">=3.10"
 
 # ── Pytest ─────────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
-testpaths       = ["tests"]
+testpaths       = ["backend/tests"]
+pythonpath = ["backend"]
 asyncio_mode    = "auto"
 addopts         = [
     "--strict-markers",
