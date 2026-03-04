@@ -1,0 +1,101 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# .gitignore — GraphRAG vs VectorRAG project
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Secrets & environment ─────────────────────────────────────────────────────
+.env
+.env.local
+.env.production
+*.pem
+*.key
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.venv/
+.ragvenv/
+ragvenv/
+venv/
+ENV/
+env/
+
+# ── Pipeline artifacts — large binary/json files ──────────────────────────────
+data/raw/*
+data/processed/chunks.json
+data/processed/extractions.json
+data/processed/graph.pkl
+data/processed/community_map.json
+data/processed/community_summaries.json
+data/processed/faiss_index.bin
+data/processed/embeddings.npy
+data/evaluation/results.json
+# Keep directory structure
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/evaluation/.gitkeep
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+backend/logs/*.log
+backend/logs/*.log.gz
+!backend/logs/.gitkeep
+
+# ── Testing & coverage ────────────────────────────────────────────────────────
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# ── Type checking ─────────────────────────────────────────────────────────────
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# ── Node / frontend ───────────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+.docker/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Notebooks ─────────────────────────────────────────────────────────────────
+notebooks/.ipynb_checkpoints/
