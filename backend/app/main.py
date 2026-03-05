@@ -138,19 +138,17 @@ def _register_routers(app: FastAPI) -> None:
     Routes are added here as each stage is completed.
     The health router is always present from Stage 1.
     """
-    from app.api.routes_health import router as health_router
+    from app.api.routes_health     import router as health_router
+    from app.api.routes_indexing   import router as indexing_router
+    from app.api.routes_query      import router as query_router
+    from app.api.routes_evaluation import router as evaluation_router
+    from app.api.routes_graph      import router as graph_router
 
-    app.include_router(health_router, prefix="/api/v1", tags=["health"])
-
-    # Stage 7: uncomment as each route file is completed
-    # from app.api.routes_indexing import router as indexing_router
-    # from app.api.routes_query import router as query_router
-    # from app.api.routes_evaluation import router as evaluation_router
-    # from app.api.routes_graph import router as graph_router
-    # app.include_router(indexing_router, prefix="/api/v1", tags=["indexing"])
-    # app.include_router(query_router, prefix="/api/v1", tags=["query"])
-    # app.include_router(evaluation_router, prefix="/api/v1", tags=["evaluation"])
-    # app.include_router(graph_router, prefix="/api/v1", tags=["graph"])
+    app.include_router(health_router,     prefix="/api/v1", tags=["health"])
+    app.include_router(indexing_router,   prefix="/api/v1", tags=["indexing"])
+    app.include_router(query_router,      prefix="/api/v1", tags=["query"])
+    app.include_router(evaluation_router, prefix="/api/v1", tags=["evaluation"])
+    app.include_router(graph_router,      prefix="/api/v1", tags=["graph"])
 
 
 def _register_exception_handlers(app: FastAPI) -> None:
