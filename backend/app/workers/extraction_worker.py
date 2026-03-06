@@ -58,6 +58,12 @@ from typing import Any, Callable, Coroutine
 from app.utils.async_utils import gather_with_concurrency
 from app.utils.logger import get_logger
 
+# Imported at module level so unittest.mock.patch() can intercept them.
+# patch("app.workers.extraction_worker.ExtractionPipeline") works correctly.
+from app.core.pipeline.extraction import ExtractionPipeline
+from app.core.pipeline.gleaning import GleaningLoop
+from app.models.graph_models import ChunkExtraction
+
 log = get_logger(__name__)
 
 
@@ -139,9 +145,6 @@ class ExtractionWorkerPool:
 
     async def __aenter__(self) -> "ExtractionWorkerPool":
         """Build the ExtractionPipeline and GleaningLoop on entry."""
-        from app.core.pipeline.extraction import ExtractionPipeline
-        from app.core.pipeline.gleaning import GleaningLoop
-
         gleaning_loop = (
             GleaningLoop(self._openai_service)
             if self._gleaning_rounds > 0
@@ -242,7 +245,6 @@ class ExtractionWorkerPool:
                     error=str(exc),
                 )
                 # Build a failed extraction so the callback still fires
-                from app.models.graph_models import ChunkExtraction
                 result = ChunkExtraction(
                     chunk_id=getattr(chunk, "chunk_id", "unknown"),
                     extraction_completed=False,

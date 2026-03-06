@@ -48,6 +48,12 @@ from app.models.response_models import (
 )
 from app.utils.logger import get_logger
 
+# Imported at module level so unittest.mock.patch() can intercept them.
+# patch("app.workers.indexing_worker.get_settings") etc. all work correctly.
+from app.config import get_settings
+from app.core.pipeline.pipeline_runner import PipelineRunner
+from app.storage.graph_store import GraphStore
+
 log = get_logger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -243,9 +249,6 @@ async def run_indexing_job(job_id: str, request: IndexRequest) -> None:
         log.info("Indexing pipeline starting", job_id=job_id)
 
         # ── Build PipelineRunner from settings + request overrides ─────────────
-        from app.config import get_settings
-        from app.core.pipeline.pipeline_runner import PipelineRunner
-
         settings = get_settings()
 
         runner = PipelineRunner(
@@ -344,7 +347,6 @@ async def run_indexing_job(job_id: str, request: IndexRequest) -> None:
 
             # Load community counts per level from the persisted community map
             try:
-                from app.storage.graph_store import GraphStore
                 gs = GraphStore(artifacts_dir=settings.artifacts_dir)
                 job["total_communities"] = gs.get_community_counts()
             except Exception as exc:
