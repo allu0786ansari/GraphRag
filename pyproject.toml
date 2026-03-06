@@ -3,10 +3,12 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.backends.legacy:build"
 
 [project]
-name = "graphrag-backend"
+name = "graphrag-vs-vectorrag"
 version = "1.0.0"
-description = "GraphRAG vs VectorRAG Global Question Answering System"
+description = "Side-by-side comparison of GraphRAG and VectorRAG for global sensemaking queries"
+readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "MIT" }
 
 # ── Pytest ─────────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
