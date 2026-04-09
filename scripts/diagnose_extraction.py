@@ -83,7 +83,7 @@ async def main() -> None:
     )
 
     try:
-        tokenizer = TokenizerService(model="gpt-4o")
+        tokenizer = TokenizerService(model="gemini-2.5-flash")
         pipeline = ExtractionPipeline(
             openai_service=svc,
             tokenizer=tokenizer,

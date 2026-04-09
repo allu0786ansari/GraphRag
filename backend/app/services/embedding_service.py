@@ -220,9 +220,15 @@ def get_embedding_service(api_key: str | None = None) -> EmbeddingService:
     )
 
 
+# ── Backwards-compat aliases (old names used in services/__init__.py) ─────────
+EMBEDDING_DIM_SMALL = EMBEDDING_DIM_DEFAULT   # 768
+EMBEDDING_DIM_LARGE = EMBEDDING_DIM_FULL      # 3072
+
 __all__ = [
     "EmbeddingService",
     "get_embedding_service",
     "EMBEDDING_DIM_DEFAULT",
     "EMBEDDING_DIM_FULL",
+    "EMBEDDING_DIM_SMALL",
+    "EMBEDDING_DIM_LARGE",
 ]
