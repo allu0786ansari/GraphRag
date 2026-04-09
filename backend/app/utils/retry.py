@@ -1,97 +1,79 @@
 """
-utils/retry.py — Retry decorators for LLM and external API calls.
+utils/retry.py — Retry decorators for LLM and embedding API calls.
 
-Uses tenacity for robust retry logic with:
-- Exponential backoff with jitter
-- Specific exception targeting (rate limits, timeouts, transient errors)
-- Logging on each retry attempt
-- Configurable max attempts and wait times
+Updated for Gemini backend: catches the same openai SDK exceptions
+(since we use the openai SDK with Gemini's OpenAI-compatible endpoint,
+the exception types are identical — openai.RateLimitError etc.)
 """
 
 from __future__ import annotations
 
+import asyncio
 import functools
+import logging
 from typing import Any, Callable, Type
 
 from tenacity import (
-    RetryError,
     retry,
     retry_if_exception_type,
     stop_after_attempt,
-    wait_exponential,
     wait_random_exponential,
+    RetryError,
     before_sleep_log,
-    after_log,
 )
-from tenacity.stop import stop_base
-from tenacity.wait import wait_base
 
 from app.utils.logger import get_logger
 
 log = get_logger(__name__)
 
-# ── Loguru-compatible logging bridge for tenacity ─────────────────────────────
-import logging as _stdlib_logging
-
-_tenacity_logger = _stdlib_logging.getLogger("tenacity")
-
-
 # ── Exception sets ─────────────────────────────────────────────────────────────
+# We still use openai SDK (via Gemini's OpenAI-compatible endpoint),
+# so the exception classes are from the openai package.
+
 try:
     import openai
 
-    _OPENAI_TRANSIENT_EXCEPTIONS: tuple[Type[Exception], ...] = (
-        openai.RateLimitError,
-        openai.APITimeoutError,
-        openai.APIConnectionError,
-        openai.InternalServerError,
+    _TRANSIENT_EXCEPTIONS: tuple[Type[Exception], ...] = (
+        openai.RateLimitError,       # 429 — hit free tier RPM limit, back off
+        openai.APITimeoutError,      # network timeout
+        openai.APIConnectionError,   # network error
+        openai.InternalServerError,  # 5xx from Gemini
     )
-    _OPENAI_FATAL_EXCEPTIONS: tuple[Type[Exception], ...] = (
-        openai.AuthenticationError,
+    _FATAL_EXCEPTIONS: tuple[Type[Exception], ...] = (
+        openai.AuthenticationError,  # bad API key — don't retry
         openai.PermissionDeniedError,
-        openai.NotFoundError,
-        openai.BadRequestError,
+        openai.NotFoundError,        # wrong model name
+        openai.BadRequestError,      # malformed request
     )
 except ImportError:
-    # openai not yet installed — fallback to generic exceptions
-    _OPENAI_TRANSIENT_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
-    _OPENAI_FATAL_EXCEPTIONS = (ValueError,)
+    _TRANSIENT_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
+    _FATAL_EXCEPTIONS = (ValueError,)
 
 
-# ── Core retry decorator factory ───────────────────────────────────────────────
+# ── Core retry factory ────────────────────────────────────────────────────────
+
 def with_retry(
     max_attempts: int = 3,
     min_wait: float = 1.0,
     max_wait: float = 60.0,
     exceptions: tuple[Type[Exception], ...] | None = None,
-    reraise: bool = True,
 ) -> Callable:
     """
-    Decorator factory for retrying functions with exponential backoff + jitter.
+    Decorator factory. Retries on transient errors with exponential backoff.
 
-    Args:
-        max_attempts: Total attempts including the first call.
-        min_wait:     Minimum seconds to wait between retries.
-        max_wait:     Maximum seconds to wait between retries.
-        exceptions:   Exception types that trigger a retry.
-                      Defaults to transient OpenAI exceptions.
-        reraise:      Re-raise the last exception after exhausting retries.
-
-    Usage:
-        @with_retry(max_attempts=3)
-        async def call_openai(prompt: str) -> str:
-            ...
+    For Gemini free tier: when you hit 429 (15 RPM limit), tenacity backs off
+    and retries automatically. min_wait=4s ensures we don't immediately
+    hammer the rate limit again.
     """
     if exceptions is None:
-        exceptions = _OPENAI_TRANSIENT_EXCEPTIONS
+        exceptions = _TRANSIENT_EXCEPTIONS
 
     def decorator(func: Callable) -> Callable:
         @retry(
             stop=stop_after_attempt(max_attempts),
             wait=wait_random_exponential(min=min_wait, max=max_wait),
             retry=retry_if_exception_type(exceptions),
-            before_sleep=_log_retry_attempt,
-            reraise=reraise,
+            reraise=True,
         )
         @functools.wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -101,63 +83,57 @@ def with_retry(
             stop=stop_after_attempt(max_attempts),
             wait=wait_random_exponential(min=min_wait, max=max_wait),
             retry=retry_if_exception_type(exceptions),
-            before_sleep=_log_retry_attempt,
-            reraise=reraise,
+            reraise=True,
         )
         @functools.wraps(func)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
             return func(*args, **kwargs)
 
-        # Return the correct wrapper based on whether the function is async
-        import asyncio
+        def _log_retry_attempt(retry_state: Any) -> None:
+            log.warning(
+                "Retrying after error",
+                attempt=retry_state.attempt_number,
+                error=str(retry_state.outcome.exception()),
+                wait=round(retry_state.next_action.sleep, 1) if retry_state.next_action else 0,
+            )
+
         if asyncio.iscoroutinefunction(func):
-            return async_wrapper
-        return sync_wrapper
+            wrapper = async_wrapper
+        else:
+            wrapper = sync_wrapper
+
+        return wrapper
 
     return decorator
 
 
-def _log_retry_attempt(retry_state) -> None:
-    """Log each retry attempt with context about the failure."""
-    attempt = retry_state.attempt_number
-    exception = retry_state.outcome.exception()
-    wait = getattr(retry_state.next_action, "sleep", 0)
+# ── Pre-built retry configs ───────────────────────────────────────────────────
 
-    log.warning(
-        "Retrying after error",
-        attempt=attempt,
-        exception_type=type(exception).__name__,
-        exception_message=str(exception),
-        wait_seconds=round(wait, 2),
-    )
-
-
-# ── Pre-configured decorators for common cases ─────────────────────────────────
-
-# Standard LLM call retry: 3 attempts, 1–60s backoff
+# Standard LLM calls — 3 attempts, 4–60s backoff
+# min_wait=4s because Gemini free tier resets RPM every 60s;
+# backing off 4s is enough to clear a short burst
 llm_retry = with_retry(
     max_attempts=3,
-    min_wait=1.0,
+    min_wait=4.0,
     max_wait=60.0,
-    exceptions=_OPENAI_TRANSIENT_EXCEPTIONS,
+    exceptions=_TRANSIENT_EXCEPTIONS,
 )
 
-# Aggressive retry for bulk operations: 5 attempts, longer backoff
+# Bulk map-stage calls — 5 attempts, longer backoff
 bulk_llm_retry = with_retry(
     max_attempts=5,
-    min_wait=2.0,
+    min_wait=5.0,
     max_wait=120.0,
-    exceptions=_OPENAI_TRANSIENT_EXCEPTIONS,
+    exceptions=_TRANSIENT_EXCEPTIONS,
 )
 
-# Fast retry for embedding calls: shorter wait since they're cheaper
+# Embedding calls — 3 attempts, shorter wait (embeddings are faster)
 embedding_retry = with_retry(
     max_attempts=3,
-    min_wait=0.5,
+    min_wait=2.0,
     max_wait=30.0,
-    exceptions=_OPENAI_TRANSIENT_EXCEPTIONS,
+    exceptions=_TRANSIENT_EXCEPTIONS,
 )
-
 
 __all__ = [
     "with_retry",
