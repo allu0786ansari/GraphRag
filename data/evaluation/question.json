@@ -1,0 +1,50 @@
+[
+  {
+    "id": "q001",
+    "question": "What are the main themes and topics covered across the entire document corpus?",
+    "category": "thematic",
+    "notes": "Tests broad corpus-level synthesis — ideal for GraphRAG's community summaries"
+  },
+  {
+    "id": "q002",
+    "question": "Who are the most influential organizations and what roles do they play in shaping the field?",
+    "category": "entity",
+    "notes": "Tests entity-centric global reasoning across multiple documents"
+  },
+  {
+    "id": "q003",
+    "question": "What are the key trends and developments that have emerged over time in this domain?",
+    "category": "temporal",
+    "notes": "Tests temporal reasoning and trend synthesis across the corpus"
+  },
+  {
+    "id": "q004",
+    "question": "What are the major points of disagreement or tension between different perspectives in the corpus?",
+    "category": "comparative",
+    "notes": "Tests diversity of perspective synthesis — a core GraphRAG strength"
+  },
+  {
+    "id": "q005",
+    "question": "How do the different communities of interest relate to and influence each other?",
+    "category": "relational",
+    "notes": "Tests relationship-level global understanding — requires graph traversal"
+  },
+  {
+    "id": "q006",
+    "question": "What are the most significant challenges and open problems described across the documents?",
+    "category": "analytical",
+    "notes": "Tests problem synthesis across multiple independent sources"
+  },
+  {
+    "id": "q007",
+    "question": "What opportunities or positive developments are highlighted throughout the corpus?",
+    "category": "analytical",
+    "notes": "Tests balanced synthesis — not just problem identification"
+  },
+  {
+    "id": "q008",
+    "question": "What recommendations or calls to action appear most frequently across the documents?",
+    "category": "prescriptive",
+    "notes": "Tests action-oriented synthesis — useful for decision-making"
+  }
+]

@@ -204,7 +204,6 @@ async def run(args: argparse.Namespace) -> int:
     """Main async entry point. Returns exit code."""
     from app.config import get_settings
     from app.core.pipeline.pipeline_runner import PipelineRunner
-    from app.models.request_models import IndexRequest
     from app.utils.logger import get_logger
 
     log = get_logger("run_indexing")
@@ -254,16 +253,21 @@ async def run(args: argparse.Namespace) -> int:
     # Show cost estimate before starting
     estimate_cost(args.data_dir, args.chunk_size, args.gleaning_rounds)
 
-    # ── Build request and run ─────────────────────────────────────────────────
-    request = IndexRequest(
+    # ── Build runner directly from CLI args ──────────────────────────────────
+    # PipelineRunner is constructed with all params directly so CLI args
+    # take precedence over whatever is in .env / settings.
+    runner = PipelineRunner(
+        raw_data_dir=args.data_dir,
+        artifacts_dir=args.artifacts_dir,
+        openai_api_key=settings.openai_api_key,
+        openai_model=settings.openai_model,
+        embedding_model=settings.openai_embedding_model,
         chunk_size=args.chunk_size,
         chunk_overlap=args.chunk_overlap,
         gleaning_rounds=args.gleaning_rounds,
-        context_window_size=args.context_window,
-        max_community_levels=args.max_community_levels,
-        force_reindex=args.force,
+        context_window=args.context_window,
+        community_max_levels=args.max_community_levels,
         skip_claims=args.skip_claims,
-        max_chunks=args.max_chunks,
     )
 
     def on_progress(stage: str, pct: float) -> None:
@@ -273,11 +277,11 @@ async def run(args: argparse.Namespace) -> int:
         print(f"\r  [{bar}] {pct:5.1f}%  {stage:<30}", end="", flush=True)
 
     start = time.time()
-    runner = PipelineRunner.from_settings()
 
     try:
         result = await runner.run(
-            request=request,
+            force_reindex=args.force,
+            max_chunks=args.max_chunks,
             on_progress=on_progress,
         )
     except KeyboardInterrupt:

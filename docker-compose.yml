@@ -1,0 +1,113 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# docker-compose.yml — Local development environment
+#
+# Services:
+#   backend  — FastAPI server with hot reload (port 8000)
+#   frontend — Vite dev server with HMR (port 5173)
+#   redis    — In-memory cache for rate limiting
+#
+# Usage:
+#   docker-compose up --build          # start all services
+#   docker-compose up backend          # start backend only
+#   docker-compose up frontend         # start frontend only
+#   docker-compose logs -f backend     # tail backend logs
+#   docker-compose down -v             # stop and remove volumes
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── FastAPI backend ───────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: builder
+    image: graphrag-backend:dev
+    container_name: graphrag-backend
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+      --reload-dir /backend/app
+      --log-level debug
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/backend/app:ro
+      - ./data:/backend/data
+      - ./backend/logs:/backend/logs
+    environment:
+      - APP_ENV=development
+      - DEBUG=true
+      - RELOAD=true
+      - LOG_FORMAT=text
+      - LOG_LEVEL=DEBUG
+      - DATA_DIR=/backend/data
+      - ARTIFACTS_DIR=/backend/data/processed
+      - RAW_DATA_DIR=/backend/data/raw
+      - EVALUATION_DIR=/backend/data/evaluation
+      - FAISS_INDEX_PATH=/backend/data/processed/faiss_index.bin
+      - EMBEDDINGS_PATH=/backend/data/processed/embeddings.npy
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  # ── React frontend (Vite dev server) ─────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: dev
+    image: graphrag-frontend:dev
+    container_name: graphrag-frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend/src:/app/src:ro
+      - ./frontend/public:/app/public:ro
+      - /app/node_modules
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8000
+      - NODE_ENV=development
+    env_file:
+      - .env
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Redis ─────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: graphrag-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+    driver: local
