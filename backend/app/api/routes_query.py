@@ -38,21 +38,21 @@ def _build_graphrag_engine():
     """Build a GraphRAGEngine from application settings."""
     from app.core.query.graphrag_engine import GraphRAGEngine
     from app.config import get_settings
-    from app.services.openai_service import OpenAIService
+    from app.services.llm_service import LLMService
     from app.services.tokenizer_service import TokenizerService
     from app.storage.summary_store import SummaryStore
 
     settings = get_settings()
-    openai_svc = OpenAIService(
-        api_key=settings.openai_api_key,
-        model=settings.openai_model,
+    llm_svc = LLMService(
+        api_key=settings.gemini_api_key,
+        model=settings.gemini_model,
         max_tokens=settings.openai_max_tokens,
         temperature=settings.openai_temperature,
     )
-    tokenizer = TokenizerService(model=settings.openai_model)
+    tokenizer = TokenizerService(model=settings.gemini_model)
     summary_store = SummaryStore(artifacts_dir=settings.artifacts_dir)
     return GraphRAGEngine(
-        openai_service=openai_svc,
+        openai_service=llm_svc,
         summary_store=summary_store,
         tokenizer=tokenizer,
     )
@@ -62,27 +62,27 @@ def _build_vectorrag_engine():
     """Build a VectorRAGEngine from application settings."""
     from app.core.query.vectorrag_engine import VectorRAGEngine
     from app.config import get_settings
-    from app.services.openai_service import OpenAIService
+    from app.services.llm_service import LLMService
     from app.services.embedding_service import EmbeddingService
     from app.services.faiss_service import FAISSService
     from app.services.tokenizer_service import TokenizerService
 
     settings = get_settings()
-    openai_svc = OpenAIService(
-        api_key=settings.openai_api_key,
-        model=settings.openai_model,
+    llm_svc = LLMService(
+        api_key=settings.gemini_api_key,
+        model=settings.gemini_model,
         max_tokens=settings.openai_max_tokens,
         temperature=settings.openai_temperature,
     )
     embedding_svc = EmbeddingService(
-        api_key=settings.openai_api_key,
-        model=settings.openai_embedding_model,
+        api_key=settings.gemini_api_key,
+        model=settings.embedding_model,
     )
     faiss_svc = FAISSService(embedding_dim=1536)
-    tokenizer = TokenizerService(model=settings.openai_model)
+    tokenizer = TokenizerService(model=settings.gemini_model)
 
     return VectorRAGEngine(
-        openai_service=openai_svc,
+        openai_service=llm_svc,
         embedding_service=embedding_svc,
         faiss_service=faiss_svc,
         tokenizer=tokenizer,

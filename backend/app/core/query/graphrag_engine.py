@@ -57,7 +57,7 @@ from pathlib import Path
 
 from app.models.graph_models import CommunitySummary
 from app.models.response_models import CommunityContext, GraphRAGAnswer, TokenUsage
-from app.services.openai_service import OpenAIService
+from app.services.llm_service import LLMService
 from app.services.tokenizer_service import TokenizerService
 from app.storage.summary_store import SummaryStore
 from app.utils.async_utils import gather_with_concurrency
@@ -145,7 +145,7 @@ class GraphRAGEngine:
 
     def __init__(
         self,
-        openai_service: OpenAIService,
+        openai_service: LLMService,
         summary_store: SummaryStore,
         tokenizer: TokenizerService,
         context_window: int = 8000,
@@ -641,17 +641,17 @@ class GraphRAGEngine:
         from app.config import get_settings
         settings = get_settings()
 
-        openai_svc = OpenAIService(
-            api_key=settings.openai_api_key,
-            model=settings.openai_model,
+        llm_svc = LLMService(
+            api_key=settings.gemini_api_key,
+            model=settings.gemini_model,
             max_tokens=settings.openai_max_tokens,
             temperature=0.0,
         )
         store = SummaryStore(artifacts_dir=settings.artifacts_dir)
-        tokenizer = TokenizerService(model=settings.openai_model)
+        tokenizer = TokenizerService(model=settings.gemini_model)
 
         return cls(
-            openai_service=openai_svc,
+            openai_service=llm_svc,
             summary_store=store,
             tokenizer=tokenizer,
             context_window=settings.context_window_size,

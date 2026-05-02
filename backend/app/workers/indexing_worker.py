@@ -254,14 +254,14 @@ async def run_indexing_job(job_id: str, request: IndexRequest) -> None:
         runner = PipelineRunner(
             raw_data_dir=settings.raw_data_dir,
             artifacts_dir=settings.artifacts_dir,
-            openai_api_key=settings.openai_api_key,
-            openai_model=settings.openai_model,
-            embedding_model=settings.openai_embedding_model,
+            openai_api_key=settings.gemini_api_key,
+            openai_model=settings.gemini_model,
+            embedding_model=settings.embedding_model,
             chunk_size=request.chunk_size,
             chunk_overlap=request.chunk_overlap,
             gleaning_rounds=request.gleaning_rounds,
             context_window=request.context_window_size,
-            max_concurrency=20,
+            max_concurrency=settings.max_concurrency,
             community_max_levels=request.max_community_levels,
             skip_claims=request.skip_claims,
         )

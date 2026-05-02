@@ -11,6 +11,7 @@ Later stages add: mock LLM client, sample chunks, test graph, etc.
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -130,6 +131,74 @@ def mock_openai_client():
         )
     )
     return client
+
+
+@pytest.fixture
+def mock_tokenizer():
+    """Return a real tokenizer service for token-counting and chunking tests."""
+    from app.services.tokenizer_service import TokenizerService
+    return TokenizerService(model="gpt-4o")
+
+
+@pytest.fixture
+def sample_chunks(sample_chunk):
+    """Return multiple sample chunks for FAISS and vector retrieval tests."""
+    return [
+        SimpleNamespace(
+            chunk_id=f"chunk_{i:04d}",
+            source_document=sample_chunk["source_document"],
+            text=sample_chunk["text"] + f" extra {i}",
+            token_count=sample_chunk["token_count"],
+        )
+        for i in range(10)
+    ]
+
+
+@pytest.fixture
+def sample_summaries():
+    """Return synthetic CommunitySummary objects for GraphRAG tests."""
+    from app.models.graph_models import CommunityLevel, CommunityFinding, CommunitySummary
+
+    return [
+        CommunitySummary(
+            community_id="comm_c1_0001",
+            level=CommunityLevel.C1,
+            title="AI ecosystem overview",
+            summary="A summary of the AI ecosystem focusing on investment and major players.",
+            impact_rating=7.5,
+            rating_explanation="This community captures the key growth drivers in AI.",
+            findings=[
+                CommunityFinding(
+                    finding_id=0,
+                    summary="OpenAI and Microsoft are central to the AI investment landscape.",
+                    explanation="OpenAI's partnership with Microsoft and large investments establish a dominant industry position.",
+                )
+            ],
+            node_ids=["OpenAI", "Microsoft"],
+            context_tokens_used=300,
+            was_truncated=False,
+            used_sub_community_substitution=False,
+        ),
+        CommunitySummary(
+            community_id="comm_c1_0002",
+            level=CommunityLevel.C1,
+            title="AI regulation discussion",
+            summary="A summary of regulatory debates around AI safety and oversight.",
+            impact_rating=6.0,
+            rating_explanation="Regulation is an important emerging theme in AI governance.",
+            findings=[
+                CommunityFinding(
+                    finding_id=0,
+                    summary="AI safety is a growing concern among policymakers.",
+                    explanation="Discussions focus on transparency, privacy, and responsible deployment.",
+                )
+            ],
+            node_ids=["AI safety", "policy"],
+            context_tokens_used=250,
+            was_truncated=False,
+            used_sub_community_substitution=False,
+        ),
+    ]
 
 
 # ── Sample data fixtures (populated by later stages) ─────────────────────────

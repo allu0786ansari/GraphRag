@@ -36,7 +36,7 @@ from app.models.graph_models import (
     ExtractedEntity,
     ExtractedRelationship,
 )
-from app.services.openai_service import OpenAIService, build_messages
+from app.services.llm_service import LLMService, build_messages
 from app.services.tokenizer_service import TokenizerService
 from app.utils.async_utils import gather_with_concurrency
 from app.utils.logger import get_logger
@@ -141,7 +141,7 @@ class ExtractionPipeline:
 
     def __init__(
         self,
-        openai_service: OpenAIService,
+        openai_service: LLMService,
         tokenizer: TokenizerService,
         gleaning_loop: GleaningLoop | None = None,
         entity_types: list[str] | None = None,
@@ -149,7 +149,7 @@ class ExtractionPipeline:
     ) -> None:
         """
         Args:
-            openai_service: OpenAI service (all LLM calls go through here).
+            openai_service: Gemini LLM service (all LLM calls go through here).
             tokenizer:      TokenizerService (for context window checks).
             gleaning_loop:  GleaningLoop instance. If None, gleaning is disabled.
             entity_types:   Entity type labels for the extraction prompt.
@@ -211,6 +211,7 @@ class ExtractionPipeline:
                 chunk_id=chunk.chunk_id,
                 error=str(e),
             )
+            log.exception("Extraction error details")
             return ChunkExtraction(
                 chunk_id=chunk.chunk_id,
                 extraction_completed=False,
@@ -246,6 +247,8 @@ class ExtractionPipeline:
         messages = [{"role": "user", "content": prompt}]
 
         result = await self.openai_service.async_chat_completion(messages=messages)
+
+        log.info("LLM response content", content=result.content[:1000])
 
         extraction = self._parse_extraction_output(result.content, chunk.chunk_id)
 
@@ -464,11 +467,11 @@ def get_extraction_pipeline(
 ) -> ExtractionPipeline:
     """Build an ExtractionPipeline from application settings."""
     from app.config import get_settings
-    from app.services.openai_service import get_openai_service
+    from app.services.llm_service import get_llm_service
     from app.services.tokenizer_service import get_tokenizer
 
     settings = get_settings()
-    openai_svc = get_openai_service()
+    openai_svc = get_llm_service()
     tokenizer  = get_tokenizer()
 
     gleaning_loop = GleaningLoop(openai_svc) if gleaning_rounds > 0 else None

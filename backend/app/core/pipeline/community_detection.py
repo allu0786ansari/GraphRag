@@ -114,6 +114,15 @@ class CommunityDetection:
             log.warning("Empty graph — no communities to detect")
             return []
 
+        # Sparse graph guard: if no edges, Leiden/Louvain will crash.
+        # Treat each connected component as its own C1 community instead.
+        if graph.number_of_edges() == 0:
+            log.warning(
+                "Graph has no edges — treating each node as its own community",
+                nodes=graph.number_of_nodes(),
+            )
+            return self._single_node_communities(graph)
+
         t0 = time.monotonic()
         log.info(
             "Community detection started",
@@ -151,8 +160,7 @@ class CommunityDetection:
         graph: Any,
         max_levels: int,
     ) -> list[CommunitySchema]:
-        """Run hierarchical Leiden via graspologic."""
-        # Convert graph to edge list for graspologic
+        """Run hierarchical Leiden via graspologic."""        # Convert graph to edge list for graspologic
         # graspologic expects integer node IDs
         node_list = list(graph.nodes())
         node_to_int = {node: i for i, node in enumerate(node_list)}
@@ -162,12 +170,26 @@ class CommunityDetection:
             for u, v in graph.edges()
         ]
 
-        # Run hierarchical Leiden
-        hierarchy = hierarchical_leiden(
-            edge_list,
-            max_cluster_size=self.max_cluster_size,
-            random_seed=self.random_seed,
-        )
+        # Leiden requires at least one edge — fall back if graph is too sparse
+        if not edge_list:
+            log.warning("No edges for Leiden — falling back to single-node communities")
+            return self._single_node_communities(graph)
+
+        try:
+            # Run hierarchical Leiden
+            hierarchy = hierarchical_leiden(
+                edge_list,
+                max_cluster_size=self.max_cluster_size,
+                random_seed=self.random_seed,
+            )
+        except Exception as e:
+            log.warning(
+                "Leiden failed — falling back to Louvain",
+                error=str(e),
+                nodes=graph.number_of_nodes(),
+                edges=graph.number_of_edges(),
+            )
+            return self._detect_louvain_fallback(graph)
 
         # Convert graspologic hierarchy to CommunitySchema list
         return self._parse_graspologic_hierarchy(
@@ -176,6 +198,28 @@ class CommunityDetection:
             max_levels=max_levels,
             graph=graph,
         )
+
+    def _single_node_communities(self, graph: Any) -> list[CommunitySchema]:
+        """
+        Fallback when graph has no edges or Leiden/Louvain fails.
+        Treats each node as its own C1 community so the pipeline can continue.
+        """
+        communities = []
+        for idx, node_id in enumerate(sorted(graph.nodes())):
+            communities.append(CommunitySchema(
+                community_id=f"comm_c1_{idx:04d}",
+                level=CommunityLevel.C1,
+                level_index=idx,
+                node_ids=[node_id],
+                edge_ids=[],
+                node_count=1,
+                edge_count=0,
+            ))
+        log.info(
+            "Single-node community fallback complete",
+            communities=len(communities),
+        )
+        return communities
 
     def _parse_graspologic_hierarchy(
         self,

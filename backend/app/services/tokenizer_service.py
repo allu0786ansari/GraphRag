@@ -1,11 +1,11 @@
 """
-services/tokenizer_service.py — Tiktoken wrapper for all token operations.
+services/tokenizer_service.py — Token operations service supporting multiple providers.
 
 Every token count, truncation, and chunking operation in the pipeline
-goes through this service. Never call tiktoken directly from pipeline code.
+goes through this service. Uses appropriate tokenizer based on model provider.
 
 Key responsibilities:
-  - count_tokens()         : exact tiktoken token count for any string
+  - count_tokens()         : exact token count for any string
   - truncate_to_limit()    : cut a string to fit within N tokens
   - chunk_text()           : split a document into 600-token chunks with 100-token overlap
                              (paper Section 3.1.1 — the exact chunking strategy)
@@ -25,6 +25,7 @@ import threading
 from functools import lru_cache
 from typing import Iterator
 
+import google.generativeai as genai
 import tiktoken
 
 from app.utils.logger import get_logger
@@ -32,8 +33,8 @@ from app.utils.logger import get_logger
 log = get_logger(__name__)
 
 # ── Model → encoding mapping ───────────────────────────────────────────────────
-# tiktoken encoding names for the models we use.
-# cl100k_base is used by: gpt-4, gpt-4o, gpt-4-turbo, text-embedding-3-small
+# Fallback tiktoken encoding used for Gemini and compatibility with
+# OpenAI-style tokenization.
 _GPT4_ENCODING = "cl100k_base"
 _FALLBACK_ENCODING = "cl100k_base"
 
@@ -49,8 +50,27 @@ def _get_encoding(encoding_name: str) -> tiktoken.Encoding:
     return tiktoken.get_encoding(encoding_name)
 
 
+def _is_gemini_model(model: str) -> bool:
+    """Check if model is a Gemini model."""
+    return "gemini" in model.lower()
+
+
+def _count_tokens_gemini(text: str, model: str) -> int:
+    """Count tokens using Gemini's API."""
+    try:
+        # Create a temporary model instance for counting
+        gemini_model = genai.GenerativeModel(model)
+        response = gemini_model.count_tokens(text)
+        return response.total_tokens
+    except Exception as e:
+        log.warning(f"Failed to count tokens with Gemini API: {e}, falling back to tiktoken")
+        # Fallback to tiktoken
+        encoding = _get_encoding(_FALLBACK_ENCODING)
+        return len(encoding.encode(text))
+
+
 def _encoding_for_model(model: str) -> tiktoken.Encoding:
-    """Return the correct tiktoken encoding for a given OpenAI model name."""
+    """Return the correct tiktoken encoding for a given model name."""
     try:
         return tiktoken.encoding_for_model(model)
     except KeyError:
@@ -63,12 +83,12 @@ def _encoding_for_model(model: str) -> tiktoken.Encoding:
 
 class TokenizerService:
     """
-    Stateless service wrapping tiktoken for all token operations.
+    Stateless service wrapping token operations for multiple providers.
 
     Thread-safe: tiktoken encodings are thread-safe for concurrent reads.
-    All methods are synchronous — tiktoken has no async API and is fast
-    enough that running in the main thread is fine. For very large batches,
-    use run_in_executor() from async_utils.
+    All methods are synchronous — tokenization is fast enough that running
+    in the main thread is fine. For very large batches, use run_in_executor()
+    from async_utils.
 
     Usage:
         tokenizer = TokenizerService()
@@ -76,27 +96,33 @@ class TokenizerService:
         chunks = tokenizer.chunk_text(document_text)
     """
 
-    def __init__(self, model: str = "gpt-4o") -> None:
+    def __init__(self, model: str = "gemini-pro") -> None:
         """
         Args:
-            model: OpenAI model name. Used to select the correct tokenizer.
-                   All GPT-4 family models use cl100k_base.
+            model: Model name. Used to select the correct tokenizer.
+                   Supports both OpenAI (gpt-*) and Gemini (gemini-*) models.
         """
         self.model = model
-        self._encoding = _encoding_for_model(model)
+        self._is_gemini = _is_gemini_model(model)
+        if not self._is_gemini:
+            # Only initialize tiktoken encoding for OpenAI models
+            self._encoding = _encoding_for_model(model)
+        else:
+            self._encoding = None  # Not needed for Gemini
+
         self._lock = threading.Lock()  # defensive lock for any future stateful ops
 
         log.debug(
             "TokenizerService initialized",
             model=model,
-            encoding=self._encoding.name,
+            provider="Gemini" if self._is_gemini else "OpenAI",
         )
 
     # ── Core token operations ──────────────────────────────────────────────────
 
     def count_tokens(self, text: str) -> int:
         """
-        Return the exact tiktoken token count for a string.
+        Return the exact token count for a string.
 
         This is the authoritative token count used everywhere in the pipeline.
         Never estimate token counts — always use this method.
@@ -105,7 +131,7 @@ class TokenizerService:
             text: Any string to count tokens for.
 
         Returns:
-            Exact number of tokens as tiktoken would count them.
+            Exact number of tokens.
 
         Example:
             count = tokenizer.count_tokens("Hello, world!")
@@ -113,17 +139,27 @@ class TokenizerService:
         """
         if not text:
             return 0
-        return len(self._encoding.encode(text))
+
+        if self._is_gemini:
+            return _count_tokens_gemini(text, self.model)
+        else:
+            return len(self._encoding.encode(text))
 
     def encode(self, text: str) -> list[int]:
         """
         Encode text to a list of token IDs.
 
         Used internally for truncation and chunking.
+        For Gemini models, falls back to tiktoken encoding.
         """
         if not text:
             return []
-        return self._encoding.encode(text)
+        if self._is_gemini:
+            # For Gemini, use tiktoken fallback for encoding operations
+            encoding = _get_encoding(_FALLBACK_ENCODING)
+            return encoding.encode(text)
+        else:
+            return self._encoding.encode(text)
 
     def decode(self, token_ids: list[int]) -> str:
         """
@@ -132,10 +168,16 @@ class TokenizerService:
         Used in truncation to reconstruct text after slicing token arrays.
         Note: decoded text may differ slightly from the original due to
         byte-level tokenization at boundaries.
+        For Gemini models, falls back to tiktoken decoding.
         """
         if not token_ids:
             return ""
-        return self._encoding.decode(token_ids)
+        if self._is_gemini:
+            # For Gemini, use tiktoken fallback for decoding operations
+            encoding = _get_encoding(_FALLBACK_ENCODING)
+            return encoding.decode(token_ids)
+        else:
+            return self._encoding.decode(token_ids)
 
     def truncate_to_limit(
         self,
@@ -167,19 +209,20 @@ class TokenizerService:
         if not text:
             return text
 
-        token_ids = self._encoding.encode(text)
+        encoding = self._encoding if self._encoding is not None else _get_encoding(_FALLBACK_ENCODING)
+        token_ids = encoding.encode(text)
         if len(token_ids) <= max_tokens:
             return text
 
         # Reserve tokens for the truncation marker
-        marker_tokens = len(self._encoding.encode(truncation_marker)) if truncation_marker else 0
+        marker_tokens = len(encoding.encode(truncation_marker)) if truncation_marker else 0
         keep_tokens = max_tokens - marker_tokens
 
         if keep_tokens <= 0:
             return truncation_marker.strip() if truncation_marker else ""
 
         truncated_ids = token_ids[:keep_tokens]
-        truncated_text = self._encoding.decode(truncated_ids)
+        truncated_text = encoding.decode(truncated_ids)
 
         log.debug(
             "Text truncated",
@@ -225,8 +268,7 @@ class TokenizerService:
         """
         Count tokens for a list of strings.
 
-        More efficient than calling count_tokens() in a loop because
-        we avoid repeated encoding overhead.
+        More efficient than calling count_tokens() in a loop.
 
         Args:
             texts: List of strings to count.
@@ -234,7 +276,11 @@ class TokenizerService:
         Returns:
             List of token counts in the same order as inputs.
         """
-        return [len(ids) for ids in self._encoding.encode_batch(texts)]
+        if self._is_gemini:
+            # For Gemini, count each text individually
+            return [self.count_tokens(text) for text in texts]
+        else:
+            return [len(ids) for ids in self._encoding.encode_batch(texts)]
 
     def total_tokens(self, texts: list[str]) -> int:
         """
@@ -294,8 +340,10 @@ class TokenizerService:
         if not text or not text.strip():
             return []
 
+        encoding = self._encoding if self._encoding is not None else _get_encoding(_FALLBACK_ENCODING)
+
         # Encode the full document once
-        all_token_ids = self._encoding.encode(text)
+        all_token_ids = encoding.encode(text)
         total_tokens = len(all_token_ids)
 
         if total_tokens == 0:
@@ -313,11 +361,11 @@ class TokenizerService:
             if not chunk_ids:
                 break
 
-            chunk_text = self._encoding.decode(chunk_ids)
+            chunk_text = encoding.decode(chunk_ids)
 
             # Compute approximate character offsets
             # We decode prefix tokens to find the character position
-            prefix_text = self._encoding.decode(all_token_ids[:start_tok]) if start_tok > 0 else ""
+            prefix_text = encoding.decode(all_token_ids[:start_tok]) if start_tok > 0 else ""
             start_char = len(prefix_text)
             end_char = start_char + len(chunk_text)
 
@@ -367,7 +415,8 @@ class TokenizerService:
         if not text or not text.strip():
             return
 
-        all_token_ids = self._encoding.encode(text)
+        encoding = self._encoding if self._encoding is not None else _get_encoding(_FALLBACK_ENCODING)
+        all_token_ids = encoding.encode(text)
         total_tokens = len(all_token_ids)
         step = chunk_size - chunk_overlap
         chunk_index = 0
@@ -379,8 +428,8 @@ class TokenizerService:
             if not chunk_ids:
                 break
 
-            chunk_text_str = self._encoding.decode(chunk_ids)
-            prefix_text = self._encoding.decode(all_token_ids[:start_tok]) if start_tok > 0 else ""
+            chunk_text_str = encoding.decode(chunk_ids)
+            prefix_text = encoding.decode(all_token_ids[:start_tok]) if start_tok > 0 else ""
 
             yield {
                 "text": chunk_text_str,
@@ -470,11 +519,14 @@ class TokenizerService:
 
     @property
     def encoding_name(self) -> str:
-        """Name of the tiktoken encoding in use."""
-        return self._encoding.name
+        """Name of the encoding in use."""
+        if self._is_gemini:
+            return "gemini-tokenizer"
+        else:
+            return self._encoding.name
 
     def __repr__(self) -> str:
-        return f"TokenizerService(model={self.model!r}, encoding={self.encoding_name!r})"
+        return f"TokenizerService(model={self.model!r}, provider={'Gemini' if self._is_gemini else 'OpenAI'}, encoding={self.encoding_name!r})"
 
 
 # ── Module-level singleton ─────────────────────────────────────────────────────
@@ -485,14 +537,14 @@ _default_tokenizer: TokenizerService | None = None
 _tokenizer_lock = threading.Lock()
 
 
-def get_tokenizer(model: str = "gpt-4o") -> TokenizerService:
+def get_tokenizer(model: str = "gemini-pro") -> TokenizerService:
     """
     Return the module-level shared TokenizerService.
 
     Creates it on first call (lazy init). Thread-safe.
 
     Args:
-        model: OpenAI model name. Only used on first call.
+        model: Model name. Only used on first call.
 
     Returns:
         The shared TokenizerService singleton.

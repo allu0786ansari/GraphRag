@@ -1,15 +1,7 @@
 """
 services/embedding_service.py — Text embedding service using Google Gemini.
 
-Migration: switched from OpenAI text-embedding-3-small to Gemini embeddings.
-- gemini-embedding-exp-03-07: free, 1000 RPD, outputs up to 3072 dims
-- We use 768 dimensions (configurable) to keep FAISS index small and fast
-- Still uses the OpenAI-compatible endpoint so no SDK change needed
-
-Gemini embedding API notes:
-  - Max 100 texts per batch request
-  - 1000 requests/day free (no credit card)
-  - embedding_dimension config controls output size (768 default)
+Uses the official google-generativeai SDK.
 """
 
 from __future__ import annotations
@@ -18,6 +10,7 @@ import asyncio
 import time
 from typing import Any
 
+import google.generativeai as genai
 import numpy as np
 
 from app.utils.async_utils import gather_with_concurrency
@@ -26,14 +19,9 @@ from app.utils.retry import embedding_retry
 
 log = get_logger(__name__)
 
-_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
-
-# Gemini embedding-exp-03-07 supports up to 3072 dims, we use 768 by default
+# Gemini embedding dimensions
 EMBEDDING_DIM_DEFAULT = 768
 EMBEDDING_DIM_FULL    = 3072
-
-# Gemini max texts per embedding request
-_GEMINI_EMBED_BATCH_SIZE = 100
 
 
 class EmbeddingService:
@@ -47,7 +35,7 @@ class EmbeddingService:
     def __init__(
         self,
         api_key: str,
-        model: str = "gemini-embedding-exp-03-07",
+        model: str = "text-embedding-004",
         timeout: int = 60,
         dimensions: int | None = 768,
     ) -> None:
@@ -55,20 +43,9 @@ class EmbeddingService:
         self.timeout    = timeout
         self.dimensions = dimensions or EMBEDDING_DIM_DEFAULT
 
-        # Use openai SDK with Gemini base_url — OpenAI-compatible endpoint
-        from openai import AsyncOpenAI, OpenAI
-        self._sync_client  = OpenAI(
-            api_key=api_key,
-            base_url=_GEMINI_BASE_URL,
-            timeout=timeout,
-            max_retries=0,
-        )
-        self._async_client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=_GEMINI_BASE_URL,
-            timeout=timeout,
-            max_retries=0,
-        )
+        # Configure the official Gemini SDK
+        genai.configure(api_key=api_key)
+        self.client = genai
 
         log.info(
             "EmbeddingService initialized (Gemini)",
@@ -87,10 +64,16 @@ class EmbeddingService:
         """Synchronous single-text embedding."""
         text = _clean_text(text)
         t0 = time.monotonic()
-        kwargs = self._build_kwargs([text])
-        response = self._sync_client.embeddings.create(**kwargs)
+        result = self.client.embed_content(
+            model=self.model,
+            content=text,
+            task_type="retrieval_document"
+        )
         latency_ms = (time.monotonic() - t0) * 1000
-        vector = _extract_vector(response, 0, self.dimensions)
+        vector = np.array(result['embedding'], dtype=np.float32)
+        # Truncate to target dimensions if needed
+        if len(vector) > self.dimensions:
+            vector = vector[:self.dimensions]
         log.debug("Sync embedding complete", model=self.model, latency_ms=round(latency_ms, 1))
         return vector
 
@@ -99,10 +82,22 @@ class EmbeddingService:
         """Async single-text embedding. Used at query time."""
         text = _clean_text(text)
         t0 = time.monotonic()
-        kwargs = self._build_kwargs([text])
-        response = await self._async_client.embeddings.create(**kwargs)
+        # Gemini SDK doesn't have async embed_content, so run in thread
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            result = await asyncio.get_event_loop().run_in_executor(
+                executor,
+                lambda: self.client.embed_content(
+                    model=self.model,
+                    content=text,
+                    task_type="retrieval_document"
+                )
+            )
         latency_ms = (time.monotonic() - t0) * 1000
-        vector = _extract_vector(response, 0, self.dimensions)
+        vector = np.array(result['embedding'], dtype=np.float32)
+        # Truncate to target dimensions if needed
+        if len(vector) > self.dimensions:
+            vector = vector[:self.dimensions]
         log.debug("Async embedding complete", model=self.model, latency_ms=round(latency_ms, 1))
         return vector
 
@@ -153,31 +148,30 @@ class EmbeddingService:
     async def _embed_batch_call(self, texts: list[str]) -> np.ndarray:
         """Single API call to embed a batch."""
         t0 = time.monotonic()
-        kwargs = self._build_kwargs(texts)
-        response = await self._async_client.embeddings.create(**kwargs)
+        # Gemini SDK doesn't have async embed_content, so run in thread
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            result = await asyncio.get_event_loop().run_in_executor(
+                executor,
+                lambda: self.client.embed_content(
+                    model=self.model,
+                    content=texts,
+                    task_type="retrieval_document"
+                )
+            )
         latency_ms = (time.monotonic() - t0) * 1000
 
-        vectors = np.zeros((len(texts), self.dimensions), dtype=np.float32)
-        for item in response.data:
-            raw = np.array(item.embedding, dtype=np.float32)
-            # Truncate or pad to target dimensions
-            if len(raw) >= self.dimensions:
-                vectors[item.index] = raw[:self.dimensions]
-            else:
-                vectors[item.index, :len(raw)] = raw
+        vectors = np.array(result['embedding'], dtype=np.float32)
+        # If single text, reshape to (1, dim)
+        if vectors.ndim == 1:
+            vectors = vectors.reshape(1, -1)
+        # Truncate to target dimensions if needed
+        if vectors.shape[1] > self.dimensions:
+            vectors = vectors[:, :self.dimensions]
 
         vectors = _l2_normalize(vectors)
         log.debug("Batch embedding call done", batch_size=len(texts), latency_ms=round(latency_ms, 1))
         return vectors
-
-    # ── Internal helpers ───────────────────────────────────────────────────────
-
-    def _build_kwargs(self, texts: list[str]) -> dict[str, Any]:
-        return {
-            "model": self.model,
-            "input": texts,
-            "encoding_format": "float",
-        }
 
     def __repr__(self) -> str:
         return f"EmbeddingService(model={self.model!r}, embedding_dim={self.embedding_dim})"
@@ -197,16 +191,6 @@ def _l2_normalize(vectors: np.ndarray) -> np.ndarray:
     return (vectors / norms).astype(np.float32)
 
 
-def _extract_vector(response: Any, index: int, dimensions: int) -> np.ndarray:
-    raw = np.array(response.data[index].embedding, dtype=np.float32)
-    if len(raw) >= dimensions:
-        vector = raw[:dimensions].reshape(1, -1)
-    else:
-        vector = np.zeros((1, dimensions), dtype=np.float32)
-        vector[0, :len(raw)] = raw
-    return _l2_normalize(vector).reshape(-1)
-
-
 # ── Factory function ───────────────────────────────────────────────────────────
 
 def get_embedding_service(api_key: str | None = None) -> EmbeddingService:
@@ -214,7 +198,7 @@ def get_embedding_service(api_key: str | None = None) -> EmbeddingService:
     settings = get_settings()
     return EmbeddingService(
         api_key=api_key or settings.gemini_api_key,
-        model=settings.openai_embedding_model,
+        model=settings.embedding_model,
         timeout=settings.openai_timeout,
         dimensions=settings.embedding_dimension,
     )

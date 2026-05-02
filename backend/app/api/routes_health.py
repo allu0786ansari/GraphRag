@@ -82,7 +82,7 @@ async def readiness() -> JSONResponse:
     # ── Check 1: Configuration ────────────────────────────────────────────────
     try:
         _ = settings.app_name
-        _ = settings.openai_model
+        _ = settings.gemini_model
         checks["configuration"] = {"status": "ok", "environment": settings.app_env}
     except Exception as exc:
         checks["configuration"] = {"status": "error", "detail": str(exc)}

@@ -19,7 +19,7 @@ Design decisions:
   - A single LLM call produces the final answer (no map-reduce).
     This is the key structural difference from GraphRAG.
   - FAISS index is loaded lazily on first query and cached in memory.
-  - All LLM calls go through OpenAIService.complete() for consistent
+  - All LLM calls go through LLMService.complete() for consistent
     retry, logging, and token tracking.
 
 Paper reference: Section 3.2 paragraph "Semantic Search baseline":
@@ -43,7 +43,7 @@ import numpy as np
 from app.models.response_models import RetrievedChunk, TokenUsage, VectorRAGAnswer
 from app.services.embedding_service import EmbeddingService
 from app.services.faiss_service import FAISSService
-from app.services.openai_service import OpenAIService
+from app.services.llm_service import LLMService
 from app.services.tokenizer_service import TokenizerService
 from app.utils.logger import get_logger
 
@@ -98,7 +98,7 @@ class VectorRAGEngine:
 
     def __init__(
         self,
-        openai_service: OpenAIService,
+        openai_service: LLMService,
         embedding_service: EmbeddingService,
         faiss_service: FAISSService,
         tokenizer: TokenizerService,
@@ -361,23 +361,23 @@ class VectorRAGEngine:
         from app.config import get_settings
         settings = get_settings()
 
-        openai_svc = OpenAIService(
-            api_key=settings.openai_api_key,
-            model=settings.openai_model,
+        llm_svc = LLMService(
+            api_key=settings.gemini_api_key,
+            model=settings.gemini_model,
             max_tokens=settings.openai_max_tokens,
             temperature=0.0,
         )
         embedding_svc = EmbeddingService(
-            api_key=settings.openai_api_key,
-            model=settings.openai_embedding_model,
+            api_key=settings.gemini_api_key,
+            model=settings.embedding_model,
         )
         faiss_svc = FAISSService(
             embedding_dim=settings.embedding_dimension,
         )
-        tokenizer = TokenizerService(model=settings.openai_model)
+        tokenizer = TokenizerService(model=settings.gemini_model)
 
         return cls(
-            openai_service=openai_svc,
+            openai_service=llm_svc,
             embedding_service=embedding_svc,
             faiss_service=faiss_svc,
             tokenizer=tokenizer,

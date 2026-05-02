@@ -45,8 +45,11 @@ _BACKEND_DIR = _PROJECT_ROOT / "backend"
 
 sys.path.insert(0, str(_BACKEND_DIR))
 
-# Set a default .env path so Settings can find it
-os.environ.setdefault("ENV_FILE", str(_BACKEND_DIR / ".env"))
+# Explicitly load backend/.env before pydantic-settings initialises.
+# Without this, pydantic looks for .env in the *current working directory*
+# (the project root) rather than inside backend/, and misses the file.
+from dotenv import load_dotenv
+load_dotenv(_BACKEND_DIR / ".env", override=False)
 
 
 def parse_args() -> argparse.Namespace:
@@ -76,8 +79,8 @@ Examples:
     parser.add_argument(
         "--data-dir",
         type=Path,
-        default=_PROJECT_ROOT / "data" / "raw",
-        help="Directory containing input .json documents (default: data/raw)",
+        default=_PROJECT_ROOT / "data" / "raw" / "articles",
+        help="Directory containing input .json documents (default: data/raw/articles)",
     )
     parser.add_argument(
         "--artifacts-dir",
@@ -143,6 +146,13 @@ Examples:
         help="Resume from last checkpoint (default: True)",
     )
     parser.add_argument(
+        "--max-concurrency",
+        type=int,
+        default=5,  # Lower default for Gemini free tier (5 req/min limit)
+        metavar="N",
+        help="Max concurrent LLM requests — reduce for free tier limits (default: 5)",
+    )
+    parser.add_argument(
         "--skip-claims",
         action="store_true",
         help="Skip claim extraction during entity/relationship extraction",
@@ -187,14 +197,14 @@ def estimate_cost(data_dir: Path, chunk_size: int, gleaning_rounds: int) -> None
         n_communities=estimated_communities,
     )
 
-    print("\n  ── Cost Estimate ────────────────────────────────")
+    print("\n  -- Cost Estimate --")
     print(f"  Documents found:       {len(doc_files)}")
     print(f"  Estimated chunks:      ~{estimated_chunks}")
     print(f"  Estimated communities: ~{estimated_communities}")
     print(f"  Extraction:            ${breakdown['extraction_usd']:.4f}")
     print(f"  Summarization:         ${breakdown['summarization_usd']:.4f}")
     print(f"  Embeddings:            ${breakdown['embeddings_usd']:.4f}")
-    print(f"  ─────────────────────────────────────────────────")
+    print(f"  -----")
     print(f"  Total estimate:        ${breakdown['total_usd']:.4f}")
     print(f"  Model:                 {breakdown['model']}")
     print("  (Estimates are rough — actual cost depends on document complexity)\n")
@@ -237,7 +247,7 @@ async def run(args: argparse.Namespace) -> int:
         return 1
 
     print(f"\n  GraphRAG Indexing Pipeline")
-    print(f"  {'─' * 48}")
+    print(f"  {'-' * 48}")
     print(f"  Documents:        {len(doc_files)} files in {args.data_dir}")
     print(f"  Artifacts:        {args.artifacts_dir}")
     print(f"  Chunk size:       {args.chunk_size} tokens")
@@ -245,10 +255,13 @@ async def run(args: argparse.Namespace) -> int:
     print(f"  Gleaning rounds:  {args.gleaning_rounds}")
     print(f"  Context window:   {args.context_window} tokens")
     print(f"  Max chunks:       {args.max_chunks or 'all'}")
+    print(f"  Max concurrency:  {args.max_concurrency}")
     print(f"  Force reindex:    {args.force}")
+    if args.max_concurrency > 5:
+        print(f"  WARNING: max-concurrency={args.max_concurrency} may exceed Gemini free tier (5/min)")
     if args.max_chunks:
-        print(f"  ⚠  max-chunks={args.max_chunks}: development mode, not full corpus")
-    print(f"  {'─' * 48}\n")
+        print(f"  WARNING: max-chunks={args.max_chunks}: development mode, not full corpus")
+    print(f"  {'-' * 48}\n")
 
     # Show cost estimate before starting
     estimate_cost(args.data_dir, args.chunk_size, args.gleaning_rounds)
@@ -259,13 +272,14 @@ async def run(args: argparse.Namespace) -> int:
     runner = PipelineRunner(
         raw_data_dir=args.data_dir,
         artifacts_dir=args.artifacts_dir,
-        openai_api_key=settings.openai_api_key,
-        openai_model=settings.openai_model,
-        embedding_model=settings.openai_embedding_model,
+        openai_api_key=settings.gemini_api_key,
+        openai_model=settings.gemini_model,
+        embedding_model=settings.embedding_model,
         chunk_size=args.chunk_size,
         chunk_overlap=args.chunk_overlap,
         gleaning_rounds=args.gleaning_rounds,
         context_window=args.context_window,
+        max_concurrency=args.max_concurrency,
         community_max_levels=args.max_community_levels,
         skip_claims=args.skip_claims,
     )
@@ -294,15 +308,17 @@ async def run(args: argparse.Namespace) -> int:
 
     elapsed = time.time() - start
 
-    print(f"\n\n  {'─' * 48}")
+    print(f"\n\n  {'-' * 48}")
     if result.success:
-        print(f"  ✓  Pipeline complete in {elapsed:.1f}s")
+        print(f"  OK  Pipeline complete in {elapsed:.1f}s")
         print(f"\n  Artifacts written to: {args.artifacts_dir}")
         print(f"\n  Stage breakdown:")
         for stage, t in result.stage_elapsed.items():
             print(f"    {stage:<30} {t:.1f}s")
     else:
-        print(f"  ✗  Pipeline failed after {elapsed:.1f}s")
+        print(f"  FAILED  Pipeline failed after {elapsed:.1f}s")
+        if result.error_message:
+            print(f"     Error: {result.error_message}")
         print(f"     Check logs for details.")
         return 1
 

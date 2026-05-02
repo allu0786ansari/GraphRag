@@ -1,15 +1,15 @@
 """
 services/__init__.py — Public re-exports for all service classes.
 
-Every external dependency (OpenAI, FAISS, tiktoken) is wrapped here.
-Pipeline code imports from app.services, never from openai/faiss/tiktoken directly.
+Every external dependency (Gemini, FAISS, tokenization) is wrapped here.
+Pipeline code imports from app.services, never from google/faiss/tiktoken directly.
 """
 
 from app.services.tokenizer_service import TokenizerService, get_tokenizer
-from app.services.openai_service import (
-    OpenAIService,
+from app.services.llm_service import (
+    LLMService,
     CompletionResult,
-    get_openai_service,
+    get_llm_service,
     build_messages,
     system_message,
     user_message,
@@ -31,10 +31,10 @@ __all__ = [
     # Tokenizer
     "TokenizerService",
     "get_tokenizer",
-    # OpenAI
-    "OpenAIService",
+    # LLM
+    "LLMService",
     "CompletionResult",
-    "get_openai_service",
+    "get_llm_service",
     "build_messages",
     "system_message",
     "user_message",

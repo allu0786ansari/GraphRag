@@ -4,12 +4,10 @@ workers/extraction_worker.py — Parallel chunk extraction worker pool.
 Purpose:
   The extraction stage (Stage 2) is the most expensive part of the indexing
   pipeline: it calls the LLM once per chunk (plus gleaning rounds), meaning a
-  1,000-chunk corpus requires 2,000–4,000 OpenAI calls.  This module wraps the
-  ExtractionPipeline with worker-pool semantics so the pipeline_runner can:
+    1,000-chunk corpus requires 2,000–4,000 Gemini calls.  This module wraps the
+    ExtractionPipeline with worker-pool semantics so the pipeline_runner can:
 
-    1. Run up to `max_concurrency` LLM calls at once (OpenAI rate-limit aware).
-    2. Save each result to disk immediately after extraction (crash recovery).
-    3. Stream live progress back to the indexing worker via a callback.
+      1. Run up to `max_concurrency` LLM calls at once (Gemini rate-limit aware).
     4. Support graceful cancellation: stop accepting new chunks while in-flight
        calls complete.
 
@@ -116,7 +114,7 @@ class ExtractionWorkerPool:
     incremental persistence.  Use as an async context manager.
 
     Args:
-        openai_service:  OpenAIService instance (authenticated, rate-limited).
+        openai_service:  Gemini LLM service instance (authenticated, rate-limited).
         tokenizer:       TokenizerService for prompt budgeting.
         gleaning_rounds: Number of self-reflection gleaning iterations (paper: 2).
         max_concurrency: Maximum simultaneous LLM calls (default: 20).
@@ -354,7 +352,7 @@ async def run_extraction_workers(
 
     Args:
         chunks:            ChunkSchema list to extract.
-        openai_service:    Authenticated OpenAIService.
+        openai_service:    Authenticated Gemini LLM service.
         tokenizer:         TokenizerService.
         gleaning_rounds:   LLM gleaning iterations (paper: 2).
         max_concurrency:   Max simultaneous LLM calls (default: 20).

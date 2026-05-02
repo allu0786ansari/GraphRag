@@ -232,8 +232,11 @@ class PipelineRunner:
             if on_progress:
                 on_progress("summarization", 1.0)
 
-            # ── Stage 6: Embedding + FAISS (optional) ──────────────────────────
+            # ── Stage 6: Embedding + FAISS ────────────────────────────────────
             if not self.skip_embedding:
+                # _run_embedding raises RuntimeError on failure — let it
+                # propagate so the outer except block handles it properly
+                # and the pipeline is NOT marked successful.
                 n_embedded = await self._run_embedding(result, chunks, on_progress)
                 result.embeddings_count = n_embedded or 0
                 if on_progress:
@@ -331,10 +334,20 @@ class PipelineRunner:
         stage = "extraction"
 
         if self.cache.is_stage_complete(stage) and self.artifact_store.extractions_exist():
-            log.info("Extraction already complete — loading from disk")
             extractions = self.artifact_store.load_extractions()
-            result.stages_skipped.append(stage)
-            return extractions
+            successful_extractions = [
+                e for e in extractions if getattr(e, "extraction_completed", False)
+            ]
+            if successful_extractions:
+                log.info("Extraction already complete — loading from disk")
+                result.stages_skipped.append(stage)
+                return extractions
+
+            log.warning(
+                "Extraction stage marked complete but no successful extractions were found; resetting extraction state",
+            )
+            self.cache.reset_stage(stage)
+            self.artifact_store.clear_extractions()
 
         log.info("Stage 2: Extraction + Gleaning")
         t0 = time.monotonic()
@@ -570,14 +583,22 @@ class PipelineRunner:
             from app.services.embedding_service import EmbeddingService
             from app.services.faiss_service import FAISSService
             from app.config import get_settings
+            import numpy as np
 
             settings = get_settings()
+
+            # Use embedding_dimension from settings — critical for Gemini
+            # (Gemini returns 768 dims; OpenAI default was 1536)
+            embedding_dim = settings.embedding_dimension
+
             emb_svc = EmbeddingService(
                 api_key=self.openai_api_key,
                 model=self.embedding_model,
+                dimensions=embedding_dim,
             )
-            faiss_svc = FAISSService(embedding_dim=settings.embedding_dimension)
+            faiss_svc = FAISSService(embedding_dim=embedding_dim)
 
+            # Only embed chunks that exist (some may have failed extraction)
             chunk_texts = [c.text for c in chunks]
             chunk_meta  = [
                 {
@@ -589,12 +610,29 @@ class PipelineRunner:
                 for c in chunks
             ]
 
-            log.info("Embedding chunks", count=len(chunk_texts))
+            if not chunk_texts:
+                log.warning("No chunks to embed — skipping FAISS build")
+                self.cache.mark_stage_complete(stage)
+                result.stages_completed.append(stage)
+                result.stage_elapsed[stage] = round(time.monotonic() - t0, 2)
+                return 0
+
+            log.info("Embedding chunks", count=len(chunk_texts), dim=embedding_dim)
             embeddings = await emb_svc.embed_batch(
                 texts=chunk_texts,
-                max_concurrency=min(5, self.max_concurrency),
+                max_concurrency=min(3, self.max_concurrency),
             )
 
+            # Validate shape before building index
+            if embeddings.shape[0] == 0:
+                raise RuntimeError("embed_batch returned empty array")
+            if embeddings.shape[1] != embedding_dim:
+                raise RuntimeError(
+                    f"Embedding dim mismatch: expected {embedding_dim}, "
+                    f"got {embeddings.shape[1]}. Check EMBEDDING_DIMENSION in .env."
+                )
+
+            log.info("Building FAISS index", vectors=embeddings.shape[0], dim=embedding_dim)
             faiss_svc.build_index(embeddings, chunk_meta)
             faiss_svc.save(
                 index_path=settings.faiss_index_path,
@@ -602,12 +640,14 @@ class PipelineRunner:
             )
 
             # Save raw embeddings as numpy for potential reuse
-            import numpy as np
             np.save(str(settings.embeddings_path), embeddings)
 
             self.cache.mark_stage_complete(stage)
             result.stages_completed.append(stage)
             result.stage_elapsed[stage] = round(time.monotonic() - t0, 2)
+
+            if on_progress:
+                on_progress(stage, 1.0)
 
             log.info("Embedding complete", chunks_embedded=len(chunk_texts))
             return len(chunk_texts)
@@ -615,15 +655,16 @@ class PipelineRunner:
         except Exception as e:
             result.error_stage = stage
             result.error_message = str(e)
-            log.error("Embedding stage failed", error=str(e))
-            return None
+            log.error("Embedding stage failed", error=str(e), exc_info=True)
+            # Re-raise so the pipeline knows embedding truly failed
+            raise RuntimeError(f"Embedding stage failed: {e}") from e
 
     # ── Internal helpers ───────────────────────────────────────────────────────
 
     def _build_services(self) -> None:
         """Lazily initialize service objects."""
         from app.services.tokenizer_service import TokenizerService
-        from app.services.openai_service import OpenAIService
+        from app.services.llm_service import LLMService
         from app.config import get_settings
 
         settings = get_settings()
@@ -632,7 +673,7 @@ class PipelineRunner:
             self._tokenizer = TokenizerService(model=self.openai_model)
 
         if self._openai_svc is None:
-            self._openai_svc = OpenAIService(
+            self._openai_svc = LLMService(
                 api_key=self.openai_api_key,
                 model=self.openai_model,
                 max_tokens=settings.openai_max_tokens,
@@ -695,9 +736,9 @@ class PipelineRunner:
         return cls(
             raw_data_dir=settings.raw_data_dir,
             artifacts_dir=settings.artifacts_dir,
-            openai_api_key=settings.openai_api_key,
-            openai_model=settings.openai_model,
-            embedding_model=settings.openai_embedding_model,
+            openai_api_key=settings.gemini_api_key,
+            openai_model=settings.gemini_model,
+            embedding_model=settings.embedding_model,
             chunk_size=settings.chunk_size,
             chunk_overlap=settings.chunk_overlap,
             gleaning_rounds=settings.gleaning_rounds,

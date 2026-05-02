@@ -1,25 +1,7 @@
 """
-services/openai_service.py — LLM completion service backed by Google Gemini.
+services/llm_service.py — LLM completion service using Google Gemini.
 
-Migration: switched from OpenAI to Google Gemini (AI Studio).
-- No credit card required — free tier at aistudio.google.com
-- OpenAI-compatible API: only base_url changes, all method signatures identical
-- Same interface as before: CompletionResult, async_chat_completion, complete,
-  batch_complete — zero changes needed in pipeline or query code
-
-Gemini free tier limits (as of 2026):
-  gemini-2.5-flash-lite: 15 RPM, 1000 RPD  ← use this for pipeline
-  gemini-2.5-flash:      10 RPM,  250 RPD  ← use for queries
-
-Rate limit note for the pipeline:
-  With 1000 RPD and ~100 chunks, the dev run takes ~10 min at safe pace.
-  Full corpus (~3000 extractions) needs 3+ days at free tier, OR
-  create multiple Google accounts (each gets 1000 RPD free).
-
-Gleaning note:
-  OpenAI's logit_bias (forced YES/NO token) is NOT supported by Gemini.
-  async_completion_with_logit_bias() falls back to a prompt instruction:
-  "Respond with only YES or NO." — works identically in practice.
+Uses the official google-generativeai SDK.
 """
 
 from __future__ import annotations
@@ -29,8 +11,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from openai import AsyncOpenAI, OpenAI
-from openai.types.chat import ChatCompletion
+import google.generativeai as genai
 
 from app.utils.async_utils import gather_with_concurrency
 from app.utils.logger import get_logger
@@ -38,11 +19,8 @@ from app.utils.retry import llm_retry, bulk_llm_retry
 
 log = get_logger(__name__)
 
-# Gemini's OpenAI-compatible endpoint
-_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
-
-# ── Response dataclass — identical to before ──────────────────────────────────
+# ── Response dataclass — adapted for Gemini ──────────────────────────────────
 
 @dataclass
 class CompletionResult:
@@ -54,7 +32,7 @@ class CompletionResult:
     model: str
     finish_reason: str
     latency_ms: float = 0.0
-    raw_response: ChatCompletion | None = field(default=None, repr=False)
+    raw_response: Any | None = field(default=None, repr=False)
 
     @property
     def estimated_cost_usd(self) -> float:
@@ -98,18 +76,17 @@ def build_messages(
 
 # ── Service class ──────────────────────────────────────────────────────────────
 
-class OpenAIService:
+class LLMService:
     """
-    LLM completion service using Google Gemini via the OpenAI-compatible API.
+    LLM completion service using Google Gemini via official SDK.
 
-    Identical interface to the original OpenAI-backed version.
-    Only the constructor internals changed — all callers unchanged.
+    Adapted interface to match the original OpenAI version.
     """
 
     def __init__(
         self,
         api_key: str,
-        model: str = "gemini-2.5-flash-lite-preview-06-17",
+        model: str = "gemini-pro",
         max_tokens: int = 4096,
         temperature: float = 0.0,
         timeout: int = 60,
@@ -121,25 +98,13 @@ class OpenAIService:
         self.timeout     = timeout
         self.max_retries = max_retries
 
-        # Both clients point to Gemini's OpenAI-compatible endpoint
-        self._sync_client = OpenAI(
-            api_key=api_key,
-            base_url=_GEMINI_BASE_URL,
-            timeout=timeout,
-            max_retries=0,
-        )
-        self._async_client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=_GEMINI_BASE_URL,
-            timeout=timeout,
-            max_retries=0,
-        )
+        genai.configure(api_key=api_key)
+        self.client = genai.GenerativeModel(model)
 
         log.info(
-            "OpenAIService initialized (Gemini backend)",
+            "OpenAIService initialized (Gemini official SDK)",
             model=model,
             max_tokens=max_tokens,
-            base_url=_GEMINI_BASE_URL,
         )
 
     # ── Sync completion ────────────────────────────────────────────────────────
@@ -157,15 +122,45 @@ class OpenAIService:
     ) -> CompletionResult:
         """Synchronous chat completion via Gemini."""
         t0 = time.monotonic()
-        kwargs = self._build_kwargs(
-            messages=messages, model=model, max_tokens=max_tokens,
-            temperature=temperature, response_format=response_format,
-            # logit_bias silently ignored — Gemini doesn't support it
+        model_name = model or self.model
+        temp = temperature if temperature is not None else self.temperature
+        max_tok = max_tokens or self.max_tokens
+
+        # Convert messages to Gemini format
+        history = []
+        for msg in messages[:-1]:
+            if msg["role"] == "user":
+                history.append({"role": "user", "parts": [msg["content"]]})
+            elif msg["role"] == "assistant":
+                history.append({"role": "model", "parts": [msg["content"]]})
+
+        prompt = messages[-1]["content"]
+
+        log.debug("Gemini sync completion", model=model_name, messages=len(messages))
+        
+        # Create a new client if model changed (not needed in new API)
+        # Create a new model instance if model changed
+        if model_name != self.model:
+            client = genai.GenerativeModel(model_name)
+        else:
+            client = self.client
+
+        response = client.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                temperature=temp,
+                max_output_tokens=max_tok,
+            ),
+            safety_settings=[
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            ]
         )
-        log.debug("Gemini sync completion", model=kwargs["model"], messages=len(messages))
-        response: ChatCompletion = self._sync_client.chat.completions.create(**kwargs)
+
         latency_ms = (time.monotonic() - t0) * 1000
-        result = self._parse_response(response, latency_ms)
+        result = self._parse_response(response, latency_ms, model_name)
         self._log_completion(result, sync=True)
         return result
 
@@ -183,17 +178,20 @@ class OpenAIService:
         logit_bias: dict[str, int] | None = None,
     ) -> CompletionResult:
         """Async chat completion via Gemini."""
-        t0 = time.monotonic()
-        kwargs = self._build_kwargs(
-            messages=messages, model=model, max_tokens=max_tokens,
-            temperature=temperature, response_format=response_format,
+        # For simplicity, use sync in async context with proper keyword args
+        import functools
+        return await asyncio.get_event_loop().run_in_executor(
+            None, 
+            functools.partial(
+                self.chat_completion, 
+                messages,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                response_format=response_format,
+                logit_bias=logit_bias
+            )
         )
-        log.debug("Gemini async completion", model=kwargs["model"], messages=len(messages))
-        response: ChatCompletion = await self._async_client.chat.completions.create(**kwargs)
-        latency_ms = (time.monotonic() - t0) * 1000
-        result = self._parse_response(response, latency_ms)
-        self._log_completion(result, sync=False)
-        return result
 
     # ── Gleaning loop: YES/NO ──────────────────────────────────────────────────
 
@@ -329,16 +327,25 @@ class OpenAIService:
             kwargs["response_format"] = response_format
         return kwargs
 
-    def _parse_response(self, response: ChatCompletion, latency_ms: float) -> CompletionResult:
-        choice = response.choices[0]
-        usage  = response.usage
+    def _parse_response(self, response, latency_ms: float, model: str) -> CompletionResult:
+        content = ""
+        if response.candidates:
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, 'text'):
+                    content += part.text
+
+        # Estimate tokens (Gemini doesn't provide exact counts)
+        prompt_tokens = len(response.prompt_feedback or [])  # rough estimate
+        completion_tokens = len(content.split())  # rough word count
+        total_tokens = prompt_tokens + completion_tokens
+
         return CompletionResult(
-            content=choice.message.content or "",
-            prompt_tokens=usage.prompt_tokens if usage else 0,
-            completion_tokens=usage.completion_tokens if usage else 0,
-            total_tokens=usage.total_tokens if usage else 0,
-            model=response.model,
-            finish_reason=choice.finish_reason or "unknown",
+            content=content,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            model=model,
+            finish_reason="stop",
             latency_ms=latency_ms,
             raw_response=response,
         )
@@ -356,20 +363,20 @@ class OpenAIService:
         )
 
     def __repr__(self) -> str:
-        return f"OpenAIService(model={self.model!r}, backend=Gemini)"
+        return f"LLMService(model={self.model!r}, backend=Gemini)"
 
 
 # ── Factory function ───────────────────────────────────────────────────────────
 
-def get_openai_service(
+def get_llm_service(
     api_key: str | None = None,
     model: str | None = None,
-) -> OpenAIService:
+) -> LLMService:
     from app.config import get_settings
     settings = get_settings()
-    return OpenAIService(
+    return LLMService(
         api_key=api_key or settings.gemini_api_key,
-        model=model or settings.openai_model,
+        model=model or settings.gemini_model,
         max_tokens=settings.openai_max_tokens,
         temperature=settings.openai_temperature,
         timeout=settings.openai_timeout,
@@ -378,11 +385,15 @@ def get_openai_service(
 
 
 __all__ = [
-    "OpenAIService",
+    "LLMService",
     "CompletionResult",
-    "get_openai_service",
+    "get_llm_service",
     "build_messages",
     "system_message",
     "user_message",
     "assistant_message",
 ]
+
+# ── Backwards compatibility aliases for legacy code ──────────────────────────────
+OpenAIService = LLMService
+get_openai_service = get_llm_service

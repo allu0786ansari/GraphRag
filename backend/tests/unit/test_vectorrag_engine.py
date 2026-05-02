@@ -23,12 +23,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 
 def make_completion_result(content="Answer text."):
-    from app.services.openai_service import CompletionResult
+    from app.services.llm_service import CompletionResult
     return CompletionResult(
         content=content, model="gpt-4o",
         prompt_tokens=200, completion_tokens=80,
         total_tokens=280, finish_reason="stop",
-        estimated_cost_usd=0.003,
     )
 
 
@@ -69,7 +68,7 @@ def mock_embedding_svc():
 
 
 @pytest.fixture
-def mock_openai_svc():
+def mock_llm_svc():
     svc = MagicMock()
     svc.model = "gpt-4o"
     svc.complete = AsyncMock(return_value=make_completion_result())
@@ -77,10 +76,10 @@ def mock_openai_svc():
 
 
 @pytest.fixture
-def engine(mock_openai_svc, mock_embedding_svc, mock_faiss, mock_tokenizer, tmp_path):
+def engine(mock_llm_svc, mock_embedding_svc, mock_faiss, mock_tokenizer, tmp_path):
     from app.core.query.vectorrag_engine import VectorRAGEngine
     engine = VectorRAGEngine(
-        openai_service=mock_openai_svc,
+        openai_service=mock_llm_svc,
         embedding_service=mock_embedding_svc,
         faiss_service=mock_faiss,
         tokenizer=mock_tokenizer,
@@ -142,7 +141,7 @@ class TestVectorRAGEngineQuery:
 
     @pytest.mark.asyncio
     async def test_empty_faiss_results_returns_graceful_answer(
-        self, mock_openai_svc, mock_embedding_svc, mock_tokenizer, tmp_path
+        self, mock_llm_svc, mock_embedding_svc, mock_tokenizer, tmp_path
     ):
         from app.core.query.vectorrag_engine import VectorRAGEngine
         empty_faiss = MagicMock()
@@ -150,7 +149,7 @@ class TestVectorRAGEngineQuery:
         empty_faiss._is_built = True
 
         engine = VectorRAGEngine(
-            openai_service=mock_openai_svc,
+            openai_service=mock_llm_svc,
             embedding_service=mock_embedding_svc,
             faiss_service=empty_faiss,
             tokenizer=mock_tokenizer,

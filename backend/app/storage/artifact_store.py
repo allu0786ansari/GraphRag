@@ -222,6 +222,12 @@ class ArtifactStore:
             elapsed_ms=round((time.monotonic() - t0) * 1000, 1),
         )
 
+    def clear_extractions(self) -> None:
+        """Delete the extraction artifact file if it exists."""
+        if self._extractions_path.exists():
+            self._extractions_path.unlink()
+            log.info("Extraction artifact cleared", path=str(self._extractions_path))
+
     def append_extraction(self, extraction: ChunkExtraction) -> None:
         """
         Append a single extraction to extractions.json.

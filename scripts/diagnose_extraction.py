@@ -20,7 +20,7 @@ load_dotenv(_PROJECT_ROOT / "backend" / ".env")
 
 async def main() -> None:
     from app.config import get_settings
-    from app.services.openai_service import OpenAIService
+    from app.services.llm_service import LLMService
     from app.services.tokenizer_service import TokenizerService
     from app.core.pipeline.extraction import ExtractionPipeline
     from app.models.graph_models import ChunkSchema
@@ -28,15 +28,17 @@ async def main() -> None:
     settings = get_settings()
 
     print(f"\n  Gemini API key set: {'yes (' + settings.gemini_api_key[:12] + '...)' if settings.gemini_api_key else 'NO — set GEMINI_API_KEY in backend/.env'}")
-    print(f"  Model:              {settings.openai_model}")
-    print(f"  Embedding model:    {settings.openai_embedding_model}")
+    print(f"  Gemini model:       {settings.gemini_model}")
+    print(f"  GEMINI_MODEL alias: {settings.gemini_model}")
+    print(f"  Embedding model:    {settings.embedding_model}")
+    print(f"  EMBEDDING_MODEL alias: {settings.embedding_model}")
 
     # ── Test 1: raw Gemini chat completion ────────────────────────────────────
     print("\n  [1/3] Testing Gemini chat completion...")
     try:
-        svc = OpenAIService(
+        svc = LLMService(
             api_key=settings.gemini_api_key,
-            model=settings.openai_model,
+            model=settings.gemini_model,
             max_retries=1,
             timeout=30,
         )
@@ -55,7 +57,7 @@ async def main() -> None:
         from app.services.embedding_service import EmbeddingService
         emb_svc = EmbeddingService(
             api_key=settings.gemini_api_key,
-            model=settings.openai_embedding_model,
+            model=settings.embedding_model,
             dimensions=settings.embedding_dimension,
         )
         vector = await emb_svc.embed_text("Test embedding for GraphRAG pipeline.")
@@ -83,7 +85,7 @@ async def main() -> None:
     )
 
     try:
-        tokenizer = TokenizerService(model="gemini-2.5-flash")
+        tokenizer = TokenizerService(model=settings.gemini_model)
         pipeline = ExtractionPipeline(
             openai_service=svc,
             tokenizer=tokenizer,

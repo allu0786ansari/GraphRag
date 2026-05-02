@@ -462,21 +462,36 @@ class CacheManager:
         """
         Atomically write current state to pipeline_state.json.
 
-        Called after every mutation. Uses .tmp → rename for atomicity.
+        Uses .tmp in the same directory (not system temp) for atomic writes.
+        Retries with delays to handle file locks (especially OneDrive).
         """
+        import time
+        
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_path = tempfile.mkstemp(
-            dir=str(self._state_path.parent),
-            prefix=f".{STATE_FILENAME}.tmp",
-            suffix=".json",
-        )
+        
+        # Create temp file in the same directory to avoid cross-device issues on Windows
+        tmp_path = self._state_path.parent / f".{STATE_FILENAME}.tmp.{os.getpid()}"
+        
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
+            # Write to temp file
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(self._state, f, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, str(self._state_path))
+            
+            # Retry renaming with exponential backoff to handle OneDrive locks
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    os.replace(str(tmp_path), str(self._state_path))
+                    return
+                except OSError as e:
+                    if attempt < max_retries - 1:
+                        delay = 0.1 * (2 ** attempt)  # exponential backoff
+                        time.sleep(delay)
+                    else:
+                        raise
         except Exception:
             try:
-                os.unlink(tmp_path)
+                tmp_path.unlink()
             except OSError:
                 pass
             raise

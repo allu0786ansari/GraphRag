@@ -33,7 +33,7 @@ Generation order: leaf → higher levels, so sub-community summaries are
 always available when needed by higher-level communities.
 
 All summaries are generated concurrently within each level (map stage),
-with max_concurrency capping the OpenAI call count.
+with max_concurrency capping the Gemini call count.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ from app.models.graph_models import (
     CommunitySchema,
     CommunitySummary,
 )
-from app.services.openai_service import OpenAIService
+from app.services.llm_service import LLMService
 from app.services.tokenizer_service import TokenizerService
 from app.utils.async_utils import gather_with_concurrency
 from app.utils.logger import get_logger
@@ -99,7 +99,7 @@ _MAX_RESPONSE_TOKENS   = 2000
 
 class SummarizationPipeline:
     """
-    Generates structured community report summaries using GPT-4o.
+    Generates structured community report summaries using Gemini.
 
     Processes communities level by level (leaf first), building context
     windows from graph data and generating JSON reports via the LLM.
@@ -120,7 +120,7 @@ class SummarizationPipeline:
 
     def __init__(
         self,
-        openai_service: OpenAIService,
+        openai_service: LLMService,
         tokenizer: TokenizerService,
         context_window: int = _CONTEXT_WINDOW_TOKENS,
         max_response_tokens: int = _MAX_RESPONSE_TOKENS,
@@ -575,12 +575,12 @@ class SummarizationPipeline:
 def get_summarization_pipeline() -> SummarizationPipeline:
     """Build a SummarizationPipeline from application settings."""
     from app.config import get_settings
-    from app.services.openai_service import get_openai_service
+    from app.services.llm_service import get_llm_service
     from app.services.tokenizer_service import get_tokenizer
 
     settings = get_settings()
     return SummarizationPipeline(
-        openai_service=get_openai_service(),
+        openai_service=get_llm_service(),
         tokenizer=get_tokenizer(),
         context_window=settings.context_window_size,
     )

@@ -35,7 +35,7 @@ from app.models.graph_models import (
     ExtractedRelationship,
     ExtractedClaim,
 )
-from app.services.openai_service import OpenAIService, build_messages
+from app.services.llm_service import LLMService, build_messages
 from app.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -65,7 +65,7 @@ class GleaningLoop:
       4. Repeats for up to max_rounds.
 
     Usage:
-        gleaner = GleaningLoop(openai_service)
+        gleaner = GleaningLoop(llm_service)
         updated_extraction = await gleaner.run(
             chunk_text=chunk.text,
             initial_extraction=extraction,
@@ -74,14 +74,14 @@ class GleaningLoop:
         )
     """
 
-    def __init__(self, openai_service: OpenAIService) -> None:
-        self.openai_service = openai_service
+    def __init__(self, llm_service: LLMService) -> None:
+        self.llm_service = llm_service
         # Get YES/NO token IDs for the model's encoding
-        self._yes_ids, self._no_ids = _get_yes_no_token_ids(openai_service.model)
+        self._yes_ids, self._no_ids = _get_yes_no_token_ids(llm_service.model)
 
         log.debug(
             "GleaningLoop initialized",
-            model=openai_service.model,
+            model=llm_service.model,
             yes_token_ids=self._yes_ids,
             no_token_ids=self._no_ids,
         )
@@ -124,7 +124,7 @@ class GleaningLoop:
             # Step 1: Ask if entities were missed (forced YES/NO)
             history.append({"role": "user", "content": _GLEANING_CHECK_PROMPT})
 
-            check_result = await self.openai_service.async_completion_with_logit_bias(
+            check_result = await self.llm_service.async_completion_with_logit_bias(
                 messages=history,
                 yes_token_ids=self._yes_ids,
                 no_token_ids=self._no_ids,
@@ -154,7 +154,7 @@ class GleaningLoop:
             # Step 2: Request the missed entities
             history.append({"role": "user", "content": _GLEANING_CONTINUE_PROMPT})
 
-            continue_result = await self.openai_service.async_chat_completion(
+            continue_result = await self.llm_service.async_chat_completion(
                 messages=history,
             )
 
@@ -207,7 +207,7 @@ class GleaningLoop:
             True if the LLM answers YES (more entities to extract).
         """
         check_history = history + [{"role": "user", "content": _GLEANING_CHECK_PROMPT}]
-        result = await self.openai_service.async_completion_with_logit_bias(
+        result = await self.llm_service.async_completion_with_logit_bias(
             messages=check_history,
             yes_token_ids=self._yes_ids,
             no_token_ids=self._no_ids,
@@ -220,11 +220,16 @@ class GleaningLoop:
 
 def _get_yes_no_token_ids(model: str) -> tuple[list[int], list[int]]:
     """
-    Return tiktoken token IDs for YES and NO variants for the given model.
+    Return token IDs for YES and NO variants for the given model.
 
-    We check both uppercase and lowercase forms. The exact IDs depend on
-    the encoding (cl100k_base for older GPT-4 vs o200k_base for gpt-4o).
+    For Gemini models, returns hardcoded token IDs that work with fallback encoding.
+    For OpenAI models, uses tiktoken directly.
     """
+    if "gemini" in model.lower():
+        # Hardcoded token IDs for Gemini using cl100k_base fallback
+        # YES token IDs: 9642, No token IDs: 2304
+        return [9642], [2304]
+
     try:
         enc = tiktoken.encoding_for_model(model)
     except KeyError:

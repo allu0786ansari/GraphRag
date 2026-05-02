@@ -74,7 +74,7 @@ from app.models.evaluation_models import (
     ClaimMetrics,
     ExtractedClaim,
 )
-from app.services.openai_service import OpenAIService
+from app.services.llm_service import LLMService
 from app.services.tokenizer_service import TokenizerService
 from app.utils.async_utils import gather_with_concurrency
 from app.utils.logger import get_logger
@@ -146,7 +146,7 @@ class ClaimValidationEngine:
 
     def __init__(
         self,
-        openai_service: OpenAIService,
+        openai_service: LLMService,
         tokenizer: TokenizerService,
         max_concurrency: int = 10,
         dedup_threshold: float = _DEDUP_THRESHOLD,
@@ -612,17 +612,17 @@ class ClaimValidationEngine:
         """Build a ClaimValidationEngine from application settings."""
         from app.config import get_settings
         settings = get_settings()
-        from app.services.openai_service import OpenAIService
+        from app.services.llm_service import LLMService
         from app.services.tokenizer_service import TokenizerService
 
-        openai_svc = OpenAIService(
-            api_key=settings.openai_api_key,
-            model=settings.openai_model,
+        llm_svc = LLMService(
+            api_key=settings.gemini_api_key,
+            model=settings.gemini_model,
             max_tokens=settings.openai_max_tokens,
             temperature=0.0,
         )
-        tokenizer = TokenizerService(model=settings.openai_model)
-        return cls(openai_service=openai_svc, tokenizer=tokenizer)
+        tokenizer = TokenizerService(model=settings.gemini_model)
+        return cls(openai_service=llm_svc, tokenizer=tokenizer)
 
 
 # ── ROUGE-L implementation (pure Python, no external dependencies) ────────────

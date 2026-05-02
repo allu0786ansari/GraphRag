@@ -37,7 +37,8 @@ try:
         openai.RateLimitError,       # 429 — hit free tier RPM limit, back off
         openai.APITimeoutError,      # network timeout
         openai.APIConnectionError,   # network error
-        openai.InternalServerError,  # 5xx from Gemini
+        openai.InternalServerError,  # 5xx from Gemini (includes 503 overloaded)
+        openai.APIStatusError,       # catch-all for any other 5xx status codes
     )
     _FATAL_EXCEPTIONS: tuple[Type[Exception], ...] = (
         openai.AuthenticationError,  # bad API key — don't retry
@@ -48,6 +49,17 @@ try:
 except ImportError:
     _TRANSIENT_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
     _FATAL_EXCEPTIONS = (ValueError,)
+
+try:
+    from google.api_core import exceptions as google_exceptions
+
+    _TRANSIENT_EXCEPTIONS += (
+        google_exceptions.ResourceExhausted,
+        google_exceptions.ServiceUnavailable,
+        google_exceptions.InternalServerError,
+    )
+except ImportError:
+    pass
 
 
 # ── Core retry factory ────────────────────────────────────────────────────────
@@ -113,9 +125,9 @@ def with_retry(
 # min_wait=4s because Gemini free tier resets RPM every 60s;
 # backing off 4s is enough to clear a short burst
 llm_retry = with_retry(
-    max_attempts=3,
+    max_attempts=5,       # more retries for 503 high-demand errors
     min_wait=4.0,
-    max_wait=60.0,
+    max_wait=90.0,        # longer max wait gives Gemini time to recover
     exceptions=_TRANSIENT_EXCEPTIONS,
 )
 

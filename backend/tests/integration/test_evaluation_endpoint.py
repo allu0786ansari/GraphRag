@@ -40,7 +40,7 @@ def mock_indexed():
     """Make the evaluation endpoint believe the corpus is indexed."""
     mock_store = MagicMock()
     mock_store.summaries_exist.return_value = True
-    with patch("app.api.routes_evaluation.SummaryStore", return_value=mock_store):
+    with patch("app.storage.summary_store.SummaryStore", return_value=mock_store):
         yield
 
 
@@ -139,7 +139,7 @@ class TestPostEvaluate:
     def test_503_when_not_indexed(self, client, auth_headers):
         mock_store = MagicMock()
         mock_store.summaries_exist.return_value = False
-        with patch("app.api.routes_evaluation.SummaryStore", return_value=mock_store):
+        with patch("app.storage.summary_store.SummaryStore", return_value=mock_store):
             response = client.post(
                 "/api/v1/evaluate",
                 json=minimal_eval_request(),

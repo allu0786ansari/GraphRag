@@ -64,7 +64,7 @@ from app.models.evaluation_models import (
     SingleJudgment,
     Winner,
 )
-from app.services.openai_service import OpenAIService
+from app.services.llm_service import LLMService
 from app.services.tokenizer_service import TokenizerService
 from app.utils.async_utils import gather_with_concurrency
 from app.utils.logger import get_logger
@@ -155,7 +155,7 @@ class EvaluationEngine:
 
     def __init__(
         self,
-        openai_service: OpenAIService,
+        openai_service: LLMService,
         graphrag_engine: GraphRAGEngine,
         vectorrag_engine: VectorRAGEngine,
         tokenizer: TokenizerService,
@@ -673,21 +673,21 @@ class EvaluationEngine:
         graphrag_engine   = GraphRAGEngine.from_settings()
         vectorrag_engine  = VectorRAGEngine.from_settings()
 
-        # Use the same OpenAI service for judge calls
+        # Use the same Gemini LLM service for judge calls
         from app.config import get_settings
         settings = get_settings()
-        from app.services.openai_service import OpenAIService
+        from app.services.llm_service import LLMService
         from app.services.tokenizer_service import TokenizerService
-        judge_openai = OpenAIService(
-            api_key=settings.openai_api_key,
-            model=settings.openai_model,
+        judge_llm = LLMService(
+            api_key=settings.gemini_api_key,
+            model=settings.gemini_model,
             max_tokens=settings.openai_max_tokens,
             temperature=0.0,
         )
-        tokenizer = TokenizerService(model=settings.openai_model)
+        tokenizer = TokenizerService(model=settings.gemini_model)
 
         return cls(
-            openai_service=judge_openai,
+            openai_service=judge_llm,
             graphrag_engine=graphrag_engine,
             vectorrag_engine=vectorrag_engine,
             tokenizer=tokenizer,
